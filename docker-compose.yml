@@ -1,0 +1,21 @@
+version: '2'
+
+x-environment-vars: &environment-vars
+  PYTHONUNBUFFERED: 1
+  PYTHONIOENCODING: utf-8
+  TERM: linux
+
+services:
+    vitrina-service:
+        build:
+            context: .
+            dockerfile: ./docker/Dockerfile.local
+        environment:
+            <<: *environment-vars
+        ports:
+            - "8000:8000"
+        volumes:
+            - .:/proj
+        command: python -m code.app
+        stdin_open: true
+        tty: true
