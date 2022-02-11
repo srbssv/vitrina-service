@@ -1,30 +1,31 @@
-from exceptions import ValidationException
+from .exceptions import ValidationException
+
 
 # Общий валидатор параметров запроса
 class Validator():
+
     def __init__(self, req):
         self.req = req
         self.__requiredRoot = set()
 
-# Валидация общих параметров
+    # Валидация общих параметров
     def _required_validation(self, params, required: set):
         # Делал через тип "сет", чтобы не использовать циклы
         params = set(params)
-        print(self.__requiredRoot)
         if not required.issubset(params):
-            raise ValidationException("Недостаточно параметров", extra="")
+            raise ValidationException("Недостаточно параметров")
 
-# Проверка на тип параметра, должен быть список
+    # Проверка на тип параметра, должен быть список
     def _islist_validation(self, param, param_name):
         if type(param) != list:
             raise ValidationException("Отсутствует массив", extra=param_name)
 
-# Валидация параметров внутри списка
+    # Валидация параметров внутри списка
     def _list_validation(self, params, required: set):
         for param in params:
             self._required_validation(param.keys(), required)
 
-# Проверка на тип параметра, должен быть словарь
+    # Проверка на тип параметра, должен быть словарь
     def _isdict_validation(self, param, param_name):
         if type(param) != dict:
             raise ValidationException("Отсутствует словарь", extra=param_name)
@@ -32,6 +33,7 @@ class Validator():
 
 # Валидатор эндпоинта /search (child class of Validator)
 class SearchValidator(Validator):
+
     def __init__(self, req):
         Validator.__init__(self, req)
         # Обязательные корневые параметры
@@ -42,8 +44,10 @@ class SearchValidator(Validator):
         # Валидация корневых параметров
         self._required_validation(self.req.keys(), self.__requiredRoot)
 
+
 # Валидатор эндпоинта /booking (child class of Validator)
 class BookingValidator(Validator):
+
     def __init__(self, req):
         Validator.__init__(self, req)
         # Обязательные корневые параметры
@@ -65,3 +69,4 @@ class BookingValidator(Validator):
             # Валидация поля "document" внутри списка "passengers"
             self._isdict_validation(passenger["document"], "document")
             self._required_validation(passenger["document"], self.__requiredDocument)
+

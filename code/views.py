@@ -1,8 +1,9 @@
 from sanic.views import HTTPMethodView
 from sanic.response import json
-from validations import BookingValidator, SearchValidator
-from exceptions import ValidationException
-from data import searchResponse, offerResponse, bookingResponse1, bookingResponse2
+from .validations import BookingValidator, SearchValidator
+from .exceptions import ValidationException
+from .data import searchResponse, bookingResponse1, bookingResponse2
+
 
 # Класс запросов для /search
 class SearchView(HTTPMethodView):
@@ -21,7 +22,7 @@ class SearchView(HTTPMethodView):
         except ValidationException as e:
             return json( {"detail": {"msg": str(e), "field": e.extra}}, status=e.status_code )
         else:
-            return json({ "id": 1 })
+            return json(searchResponse)
 
 
 # Класс запросов для /booking
@@ -42,3 +43,4 @@ class BookingView(HTTPMethodView):
             return json( {"detail": {"msg": str(e), "field": e.extra}}, status=e.status_code )
         else:
             return json({bookingResponse2})
+
