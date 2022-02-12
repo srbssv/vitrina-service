@@ -8,4 +8,3 @@ class ValidationException(SanicException):
 
 class NotFoundException(NotFound):
     message = "Бронь не найдена"
-

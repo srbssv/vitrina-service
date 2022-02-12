@@ -1,6 +1,16 @@
 from .exceptions import ValidationException
 
 
+# Обязательные корневые параметры POST /search
+SEARCH_REQUIRED = {"provider", "cabin", "origin", "destination", "dep_at", "adults", "currency"}
+# Обязательные корневые параметры POST /booking
+BOOKING_REQUIRED = {"offer_id", "phone", "email", "passengers"}
+# Обязательные параметры "passengers" POST /booking
+BOOKING_REQUIRED_PASSENGERS = {"gender", "type", "first_name", "last_name", "date_of_birth", "citizenship", "document"}
+# Обязательные параметры "document" POST /search
+BOOKING_REQUIRED_DOCUMENT = {"number", "expires_at", "iin"}
+
+
 # Общий валидатор параметров запроса
 class Validator():
 
@@ -36,13 +46,10 @@ class SearchValidator(Validator):
 
     def __init__(self, req):
         Validator.__init__(self, req)
-        # Обязательные корневые параметры
-        self.__requiredRoot = { "provider", "cabin", "origin", \
-             "destination", "dep_at", "adults", "currency" }
 
     def validate(self):
         # Валидация корневых параметров
-        self._required_validation(self.req.keys(), self.__requiredRoot)
+        self._required_validation(self.req.keys(), SEARCH_REQUIRED)
 
 
 # Валидатор эндпоинта /booking (child class of Validator)
@@ -50,23 +57,15 @@ class BookingValidator(Validator):
 
     def __init__(self, req):
         Validator.__init__(self, req)
-        # Обязательные корневые параметры
-        self.__requiredRoot = { "offer_id", "phone", "email", "passengers" }
-        # Обязательные параметры поля "passengers"
-        self.__requiredPassengers = { "gender", "type", "first_name", \
-             "last_name", "date_of_birth", "citizenship", "document" }
-        # Обязательные параметры поля "document"
-        self.__requiredDocument = { "number", "expires_at", "iin" }
 
     def validate(self):
         # Валидация корневых параметров
-        self._required_validation(self.req.keys(), self.__requiredRoot)
+        self._required_validation(self.req.keys(), BOOKING_REQUIRED)
         # Валидация на предмет списка "passengers"
         self._islist_validation(self.req["passengers"], "passengers")
         # Валидация внутри списка "passengers"
-        self._list_validation(self.req["passengers"], self.__requiredPassengers)
+        self._list_validation(self.req["passengers"], BOOKING_REQUIRED_PASSENGERS)
         for passenger in self.req["passengers"]:
             # Валидация поля "document" внутри списка "passengers"
             self._isdict_validation(passenger["document"], "document")
-            self._required_validation(passenger["document"], self.__requiredDocument)
-
+            self._required_validation(passenger["document"], BOOKING_REQUIRED_DOCUMENT)

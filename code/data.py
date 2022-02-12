@@ -207,4 +207,3 @@ offerResponse = {
     "INF": 0
   }
 }
-
