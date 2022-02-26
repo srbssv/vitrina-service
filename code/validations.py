@@ -3,7 +3,7 @@ from .exceptions import ValidationException
 
 # Обязательные корневые параметры POST /search
 SEARCH_REQUIRED = {
-        "provider", "cabin", "origin",
+        "cabin", "origin",
         "destination", "dep_at", "adults",
         "currency"}
 # Обязательные корневые параметры POST /booking
@@ -22,9 +22,8 @@ class Validator:
 
     def __init__(self, req):
         self.req = req
-        self.__requiredRoot = set()
 
-    # Валидация общих параметров
+    # Валидация общих обязательных параметров
     def _required_validation(self, params, required: set):
         # Делал через тип "сет", чтобы не использовать циклы
         params = set(params)
@@ -52,9 +51,6 @@ class SearchValidator(Validator):
 
     def __init__(self, req):
         Validator.__init__(self, req)
-
-    def validate(self):
-        # Валидация корневых параметров
         self._required_validation(self.req.keys(), SEARCH_REQUIRED)
 
 
@@ -63,9 +59,6 @@ class BookingValidator(Validator):
 
     def __init__(self, req):
         Validator.__init__(self, req)
-
-    def validate(self):
-        # Валидация корневых параметров
         self._required_validation(self.req.keys(), BOOKING_REQUIRED)
         # Валидация на предмет списка "passengers"
         self._islist_validation(self.req["passengers"], "passengers")

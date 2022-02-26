@@ -1,1 +1,5 @@
 sanic==21.*
+sanic-ext
+asyncpg
+httpx
+aioredis
