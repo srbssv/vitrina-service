@@ -3,15 +3,12 @@ import json
 from sanic.exceptions import NotFound, SanicException
 #import asyncpg
 import aioredis
-import httpx
-#from .views import SearchView, BookingView
-from .data import searchResponse, bookingResponse1, bookingResponse2
-from .validations import BookingValidator, SearchValidator
+from .data import bookingResponse1, bookingResponse2
+from .validations import BookingValidator
 from .exceptions import ValidationException
 from .settings import VitrinaConfig
-from .extapi import ExtApi
-from .db import RedisDb
-
+from .extapi import send, scan, get_status, get
+import uuid
 
 
 app = Sanic("vitrina-service", config=VitrinaConfig())
@@ -28,14 +25,20 @@ async def cleanup(app, loop):
     await app.ctx.redis.close()
 
 
+@app.post("/search")
+async def post_search(request):
+    req = request.json
+    id = str(uuid.uuid4())
+    ext_api = await send(id, req, app.ctx.redis)
+    return response.json({"id":ext_api})
+
+
 # Search endpoint (GET, POST)
-#app.add_route(SearchView.as_view(), "/search")
 @app.get("/search/<search_id>")
 async def get_search(request, search_id):
-    r = RedisDb(app.ctx.redis)
-    items = await r.scan(f"vitrina.search:{search_id}:*")
+    items = await scan(app.ctx.redis, f"vitrina.search:{search_id}:*")
     search_ids = [i.split(":")[2] for i in items]
-    status = await r.status(search_id)
+    status = await get_status(search_id, app.ctx.redis)
     return response.json({
         "search_id": search_id,
         "status": status,
@@ -45,9 +48,8 @@ async def get_search(request, search_id):
 
 @app.get("/offers/<offer_id>")
 async def get_offer(request, offer_id):
-    r = RedisDb(app.ctx.redis)
-    offer = await r.scan(f"vitrina.search:*:{offer_id}")
-    offer = await r.get(offer[0])
+    offer = await scan(app.ctx.redis, f"vitrina.search:*:{offer_id}")
+    offer = await get(app.ctx.redis, offer[0])
     offer = json.loads(offer)
     return response.json({
         "offer_id": offer_id,
@@ -55,17 +57,7 @@ async def get_offer(request, offer_id):
         })
 
 
-@app.post("/search")
-async def post_search(request):
-    req = request.json
-    v = SearchValidator(req)
-    ext_api = ExtApi(req, app, app.ctx.redis, app.config.PROVIDER_TIMEOUT, app.config.REDIS_KEY_EXPIRE)
-    ext_api_result = await ext_api.send()
-    return response.json({"id":ext_api_result})
-
-
 # Booking endpoint (GET, POST)
-#app.add_route(BookingView.as_view(), "/booking")
 @app.get("/booking")
 async def get_booking(request):
     return response.json(bookingResponse1)

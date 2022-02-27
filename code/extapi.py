@@ -1,61 +1,83 @@
 import asyncio
-import uuid
 import httpx
 import json
-from sanic.exceptions import SanicException
-from sanic import response
-from aioredis import Redis
+from sanic.exceptions import NotFound
 
-def generate_id(redis_keys):
-    id = str(uuid.uuid4())
-    if not id in redis_keys:
-        return id
+
+REDIS_KEY_EXPIRE = 1200
+PROVIDER_TIMEOUT = 30
+
+
+async def send(id, req, redis):
+    for provider in ["Amadeus", "Sabre"]:
+        asyncio.create_task(post2api(id, req, redis, provider))
+    return id
+
+
+async def post2api(id, req, redis, provider):
+    async with httpx.AsyncClient() as client:
+        req["provider"] = provider
+        await set_status(id, "PENDING", redis, provider)
+        resp = None
+        try:
+            resp = await client.post(
+                "https://avia-api.k8s-test.aviata.team/offers/search", 
+                json=req, 
+                timeout=PROVIDER_TIMEOUT
+                )
+        except httpx.TimeoutException as te:
+            await set_status(id, "DONE", redis, provider)
+        finally:
+            resp = resp.json()
+            await set_status(id, "DONE", redis, provider)
+        for item in resp["items"]:
+            search_id , *rest = item
+            search_id = item[search_id]
+            key_id = f"vitrina.search:{id}:{search_id}"
+            rest_temp = dict()
+            for r in rest:
+                rest_temp[r] = item[r]
+            await redis.set(key_id, json.dumps(rest_temp), ex=REDIS_KEY_EXPIRE)
+
+
+async def set_status(id, status, redis, provider):
+    await redis.set(f"vitrina.search:{provider}:STATUS:{id}", status, ex=REDIS_KEY_EXPIRE)
+
+
+async def get_provider_status(id, redis, provider):
+    return await redis.get(f"vitrina.search:{provider}:STATUS:{id}")
+
+
+async def get_status(id, redis):
+    statuses = {"Amadeus": "", "Sabre": ""}
+    for provider in statuses:
+        statuses[provider] = await get_provider_status(id, redis, provider)
+    if (statuses["Amadeus"] == "DONE") and (statuses["Sabre"] == "DONE"):
+        return "DONE"
     else:
-        generate_id(redis_keys)
+        return "PENDING"
 
-class ExtApi:
-    def __init__(self, request, app, redis: Redis, timeout, key_expire):
-        self.request = request
-        self.app = app
-        self.redis = redis
-        self.timeout = timeout
-        self.key_expire = key_expire
 
-    async def __set_status(self, id, status):
-        await self.redis.set(f"vitrina.search:{id}.STATUS", status, ex=self.key_expire)
+async def info_keys(redis):
+        key_count = await redis.info(section="Keyspace")
+        if len(key_count) > 0:
+            return key_count["db0"]["keys"]
+        else:
+            raise NotFound("Записей не найдено")
 
-    async def __post(self, id, req, provider):
-        async with httpx.AsyncClient() as client:
-            req["provider"] = provider
-            resp = None
-            try:
-                resp = await client.post(
-                    "https://avia-api.k8s-test.aviata.team/offers/search", 
-                    json=req, 
-                    timeout=self.timeout
-                    )
-            except httpx.TimeoutException as te:
-                resp = resp.json()
-            except httpx.RequestError as re:
-                print("ERROR IS ERROR IS ", str(re))
-                raise SanicException(str(re))
-            if resp != None:
-                resp = resp.json()
-                for item in resp["items"]:
-                    search_id , *rest = item
-                    search_id = item[search_id]
-                    key_id = f"vitrina.search:{id}:{search_id}"
-                    rest_temp = dict()
-                    for r in rest:
-                        rest_temp[r] = item[r]
-                    await self.redis.set(key_id, json.dumps(rest_temp), ex=self.key_expire)
-                if provider == "Sabre":
-                    await self.__set_status(id, "DONE")
-                    
 
-    async def send(self):
-        id = generate_id([])
-        await self.__set_status(id, "PENDING")
-        for provider in ["Amadeus", "Sabre"]:
-            task = asyncio.create_task(self.__post(id, self.request, provider))
-        return id
+async def scan(redis, match):
+    key_count = await info_keys(redis)
+    n, items = await redis.scan(0, match=match, count=key_count)
+    if len(items) > 0:
+        return items
+    else:
+        raise NotFound("Записей не найдено")
+
+
+async def get(redis, id):
+        result = await redis.get(id)
+        if result != None:
+            return result
+        else:
+            raise NotFound("Записей не найдено")
