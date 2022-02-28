@@ -1,43 +1,45 @@
 import asyncio
 import httpx
 import json
-from sanic.exceptions import NotFound
+import xmltodict
+import sanic.response as response
+from sanic.exceptions import NotFound, SanicException
+from datetime import date
+from .exceptions import ValidationException
 
 
 REDIS_KEY_EXPIRE = 1200
 PROVIDER_TIMEOUT = 30
+PROVIDERS = ['Amadeus', 'Sabre']
+PENDING = 'PENDING'
+DONE = 'DONE'
 
 
-async def send(id, req, redis):
-    for provider in ["Amadeus", "Sabre"]:
+async def send_search(id, req, redis):
+    for provider in PROVIDERS:
+        await set_status(id, PENDING, redis, provider)
         asyncio.create_task(post2api(id, req, redis, provider))
-    return id
 
 
 async def post2api(id, req, redis, provider):
     async with httpx.AsyncClient() as client:
-        req["provider"] = provider
-        await set_status(id, "PENDING", redis, provider)
+        req['provider'] = provider
         resp = None
         try:
             resp = await client.post(
                 "https://avia-api.k8s-test.aviata.team/offers/search", 
                 json=req, 
-                timeout=PROVIDER_TIMEOUT
-                )
-        except httpx.TimeoutException as te:
-            await set_status(id, "DONE", redis, provider)
+                timeout=PROVIDER_TIMEOUT)
+
+            for item in resp.json()['items']:                                
+                offer_id = item['id']
+                async with redis.pipeline(transaction=True) as pipe:
+                    await pipe.lpush(f'vitrina.search:{id}', offer_id)\
+                        .expire(f'vitrina.search:{id}', REDIS_KEY_EXPIRE)\
+                        .set(f'vitrina.search:{offer_id}', json.dumps(item), ex=REDIS_KEY_EXPIRE)\
+                            .execute()
         finally:
-            resp = resp.json()
-            await set_status(id, "DONE", redis, provider)
-        for item in resp["items"]:
-            search_id , *rest = item
-            search_id = item[search_id]
-            key_id = f"vitrina.search:{id}:{search_id}"
-            rest_temp = dict()
-            for r in rest:
-                rest_temp[r] = item[r]
-            await redis.set(key_id, json.dumps(rest_temp), ex=REDIS_KEY_EXPIRE)
+            await set_status(id, DONE, redis, provider)
 
 
 async def set_status(id, status, redis, provider):
@@ -49,35 +51,34 @@ async def get_provider_status(id, redis, provider):
 
 
 async def get_status(id, redis):
-    statuses = {"Amadeus": "", "Sabre": ""}
-    for provider in statuses:
-        statuses[provider] = await get_provider_status(id, redis, provider)
-    if (statuses["Amadeus"] == "DONE") and (statuses["Sabre"] == "DONE"):
-        return "DONE"
-    else:
-        return "PENDING"
-
-
-async def info_keys(redis):
-        key_count = await redis.info(section="Keyspace")
-        if len(key_count) > 0:
-            return key_count["db0"]["keys"]
-        else:
-            raise NotFound("Записей не найдено")
-
-
-async def scan(redis, match):
-    key_count = await info_keys(redis)
-    n, items = await redis.scan(0, match=match, count=key_count)
-    if len(items) > 0:
-        return items
-    else:
-        raise NotFound("Записей не найдено")
+    statuses = await asyncio.gather(*(get_provider_status(id, redis, p) for p in PROVIDERS))
+    return 'DONE' if set(statuses) == {'DONE'} else 'PENDING'
 
 
 async def get(redis, id):
-        result = await redis.get(id)
-        if result != None:
-            return result
-        else:
-            raise NotFound("Записей не найдено")
+    return await redis.get(f'vitrina.search:{id}')
+
+async def get_list(redis, id):
+    return await redis.lrange(f'vitrina.search:{id}', 0, -1)
+
+
+async def rates_api(d):
+    try:
+        dt = date.fromisoformat(d)
+    except Exception as e:
+        raise SanicException(str(e))
+    if dt > date.today():
+        raise ValidationException("Дата должна быть раньше или равна сегодняшней")
+    else:
+        dt = date.today()
+    async with httpx.AsyncClient() as client:
+        url = f"https://www.nationalbank.kz/rss/get_rates.cfm?fdate={dt.strftime('%d.%m.%Y')}"
+        resp = await client.get(url)
+        if resp.status_code != 200:
+            raise SanicException("Не удалось получить данные от провайдера")
+        xml = xmltodict.parse(resp.text)
+        rates = {rate['title']: rate['description'] for rate in xml['rates']['item']}
+        return response.json({
+        'date': dt.isoformat(),
+        'rates': rates
+        })

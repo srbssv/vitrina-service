@@ -3,3 +3,4 @@ sanic-ext
 asyncpg
 httpx
 aioredis
+xmltodict

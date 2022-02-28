@@ -7,7 +7,7 @@ from .data import bookingResponse1, bookingResponse2
 from .validations import BookingValidator
 from .exceptions import ValidationException
 from .settings import VitrinaConfig
-from .extapi import send, scan, get_status, get
+from .extapi import send_search, scan, get_status, get, rates_api, get_list
 import uuid
 
 
@@ -29,16 +29,17 @@ async def cleanup(app, loop):
 async def post_search(request):
     req = request.json
     id = str(uuid.uuid4())
-    ext_api = await send(id, req, app.ctx.redis)
-    return response.json({"id":ext_api})
+    await send_search(id, req, app.ctx.redis)
+    return response.json({"id":id})
 
 
 # Search endpoint (GET, POST)
 @app.get("/search/<search_id>")
 async def get_search(request, search_id):
-    items = await scan(app.ctx.redis, f"vitrina.search:{search_id}:*")
-    search_ids = [i.split(":")[2] for i in items]
     status = await get_status(search_id, app.ctx.redis)
+    search_ids = await get_list(app.ctx.redis, search_id)
+    if len(search_ids) == 0:
+        raise NotFound("Поиск с таким id не найден!")
     return response.json({
         "search_id": search_id,
         "status": status,
@@ -48,13 +49,10 @@ async def get_search(request, search_id):
 
 @app.get("/offers/<offer_id>")
 async def get_offer(request, offer_id):
-    offer = await scan(app.ctx.redis, f"vitrina.search:*:{offer_id}")
-    offer = await get(app.ctx.redis, offer[0])
-    offer = json.loads(offer)
-    return response.json({
-        "offer_id": offer_id,
-        "items": offer
-        })
+    offer = await get(app.ctx.redis, offer_id)
+    if offer == None:
+        raise NotFound("Оффер с таким id не найден!")
+    return response.json(json.loads(offer))
 
 
 # Booking endpoint (GET, POST)
@@ -69,6 +67,12 @@ async def post_booking(request):
     # Валидация обязательных параметров
     v = BookingValidator(req)
     return response.json(bookingResponse2)
+
+
+@app.get("/get_rates")
+async def get_rates(request):
+    date = request.args.get('date')
+    return await rates_api(date)
 
 
 @app.exception(ValidationException)
