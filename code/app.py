@@ -7,7 +7,7 @@ from .data import bookingResponse1, bookingResponse2
 from .validations import BookingValidator
 from .exceptions import ValidationException
 from .settings import VitrinaConfig
-from .extapi import send_search, scan, get_status, get, rates_api, get_list
+from .extapi import send_search, get_status, rates_api, get_list, get
 import uuid
 
 
@@ -37,22 +37,22 @@ async def post_search(request):
 @app.get("/search/<search_id>")
 async def get_search(request, search_id):
     status = await get_status(search_id, app.ctx.redis)
-    search_ids = await get_list(app.ctx.redis, search_id)
-    if len(search_ids) == 0:
+    offers = await get_list(app.ctx.redis, search_id)
+    if not offers:
         raise NotFound("Поиск с таким id не найден!")
     return response.json({
         "search_id": search_id,
         "status": status,
-        "items": search_ids
+        "items": offers
         })
 
 
 @app.get("/offers/<offer_id>")
 async def get_offer(request, offer_id):
     offer = await get(app.ctx.redis, offer_id)
-    if offer == None:
+    if not offer:
         raise NotFound("Оффер с таким id не найден!")
-    return response.json(json.loads(offer))
+    return response.json({"pepsi": json.loads(offer)})
 
 
 # Booking endpoint (GET, POST)

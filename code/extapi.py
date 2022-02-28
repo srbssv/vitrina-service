@@ -3,7 +3,7 @@ import httpx
 import json
 import xmltodict
 import sanic.response as response
-from sanic.exceptions import NotFound, SanicException
+from sanic.exceptions import SanicException
 from datetime import date
 from .exceptions import ValidationException
 
@@ -30,14 +30,12 @@ async def post2api(id, req, redis, provider):
                 "https://avia-api.k8s-test.aviata.team/offers/search", 
                 json=req, 
                 timeout=PROVIDER_TIMEOUT)
-
-            for item in resp.json()['items']:                                
-                offer_id = item['id']
+            for item in resp.json()['items']:
+                offer_id = item["id"]
                 async with redis.pipeline(transaction=True) as pipe:
-                    await pipe.lpush(f'vitrina.search:{id}', offer_id)\
-                        .expire(f'vitrina.search:{id}', REDIS_KEY_EXPIRE)\
+                    await pipe.lpush(f'vitrina.search:{id}', json.dumps(item))\
                         .set(f'vitrina.search:{offer_id}', json.dumps(item), ex=REDIS_KEY_EXPIRE)\
-                            .execute()
+                        .expire(f'vitrina.search:{id}', REDIS_KEY_EXPIRE).execute()
         finally:
             await set_status(id, DONE, redis, provider)
 
@@ -55,11 +53,13 @@ async def get_status(id, redis):
     return 'DONE' if set(statuses) == {'DONE'} else 'PENDING'
 
 
+async def get_list(redis, id):
+    offers = await redis.lrange(f'vitrina.search:{id}', 0, -1)
+    return [json.loads(offer) for offer in offers]
+
+
 async def get(redis, id):
     return await redis.get(f'vitrina.search:{id}')
-
-async def get_list(redis, id):
-    return await redis.lrange(f'vitrina.search:{id}', 0, -1)
 
 
 async def rates_api(d):
