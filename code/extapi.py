@@ -156,6 +156,15 @@ def query_result(data):
                 }
 
 
+def query_result_items(data, page=0, limit=0, total=0):
+    results = query_result(data)
+    return {
+        'page': page,
+        'items': results,
+        'limit': limit,
+        'total': total
+    }
+
 async def get_booking(booking, db_pool: Pool):
     async with db_pool.acquire() as conn:
         async with conn.transaction():
@@ -171,17 +180,12 @@ async def get_booking(booking, db_pool: Pool):
 
 
 async def get_booking_filtered(args, db_pool: Pool):
-
-    def is_int(value):
-        try:
-            int(is_int)
-        except:
-            return False
-        else:
-            return True
-
+    show_as_items = False
     # Получаем offset и limit
     arg_sql = {'page': 'OFFSET', 'limit': 'LIMIT'}
+    # символ "+" при передаче через URL теряется, поэтому добавляем его в начало строки
+    if 'phone' in args:
+        args['phone'][0] = '+' + args['phone'][0][1:]
     offset_limit = ''
     for item in arg_sql:
         arg = args.get(item)
@@ -198,4 +202,10 @@ async def get_booking_filtered(args, db_pool: Pool):
                     ON passengers.booking_id=booking.id 
                     {where} {offset_limit}
                 ''')
-    return query_result(data)
+        if len(offset_limit) > 0:
+            count = await conn.fetchval('''
+                SELECT COUNT(*) FROM booking
+            ''')
+            return query_result_items(data, args['page'][0], args['limit'][0], str(count))
+        else:
+            return query_result(data)
