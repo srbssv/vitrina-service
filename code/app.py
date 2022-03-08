@@ -7,7 +7,7 @@ from .data import bookingResponse2
 from .validations import BookingValidator
 from .settings import VitrinaConfig
 from .extapi import send_search, get_status, get_list,\
-    get, get_ratevalue, rates_api, get_ratekey, send_booking, get_booking
+    get, get_ratevalue, rates_api, get_ratekey, send_booking, get_booking, get_booking_filtered
 import uuid
 import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -93,6 +93,16 @@ async def get_booking_(request, booking_id):
     if not data:
         raise NotFound('Букинг не найден!')
     return response.json(data)
+
+
+@app.get('/booking/')
+async def get_booking_(request):
+    args = request.args
+    if args:
+        data = await get_booking_filtered(args, app.ctx.db_pool)
+        return response.json({'args': args})
+    else:
+        raise NotFound('Ничего не найдено')
 
 
 @app.exception(SanicException)

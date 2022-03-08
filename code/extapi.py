@@ -3,7 +3,7 @@ import httpx
 import json
 import xmltodict
 import datetime
-from asyncpg import Pool
+from asyncpg import Pool, Record
 
 
 REDIS_KEY_EXPIRE = 60 * 20
@@ -126,36 +126,50 @@ async def booking_api(req, db_pool: Pool):
         return resp
 
 
-async def get_booking(args, db_pool: Pool):
-    PASSENGERS_KEYS = ['gender', 'type', 'first_name', 'last_name', 'date_of_birth', 'citizenship', 'document']
-    JSON_KEYS = ['offer', 'document']
+def query_result(data):
+    if data == None:
+        return None
+    if type(data) == list:
+        return [
+                    {
+                        'id': d['id'], 'pnr': d['pnr'], 'expires_at': d['expires_at'],
+                        'phone': d['phone'], 'email': d['email'], 'offer': json.loads(d['offer']),
+                        'passengers': {
+                            'gender': d['gender'], 'type': d['type'], 
+                            'first_name': d['first_name'], 'last_name': d['last_name'], 
+                            'date_of_birth': d['date_of_birth'], 'citizenship': d['citizenship'],
+                            'document': json.loads(d['document'])
+                        }
+                    }
+                    for d in data
+                ]
+    if type(data) == Record:
+        return {
+                    'id': data['id'], 'pnr': data['pnr'], 'expires_at': data['expires_at'],
+                    'phone': data['phone'], 'email': data['email'], 'offer': json.loads(data['offer']),
+                    'passengers': {
+                        'gender': data['gender'], 'type': data['type'], 
+                        'first_name': data['first_name'], 'last_name': data['last_name'], 
+                        'date_of_birth': data['date_of_birth'], 'citizenship': data['citizenship'],
+                        'document': json.loads(data['document'])
+                    }
+                }
+
+
+async def get_booking(booking, db_pool: Pool):
     async with db_pool.acquire() as conn:
         async with conn.transaction():
-            if args == 'ALL':
+            if booking == 'ALL':
                 data = await conn.fetch('''
-                    SELECT b.*, p.gender, p.type, p.first_name, p.last_name, p.date_of_birth, p.citizenship, p.document
-                    FROM booking 
-                    AS b INNER JOIN passengers 
-                    AS p ON p.booking_id=b.id
+                    SELECT * FROM booking INNER JOIN passengers ON passengers.booking_id=booking.id
                 ''')
             else:
-                data = await conn.fetch('''
-                    SELECT b.*, p.gender, p.type, p.first_name, p.last_name, p.date_of_birth, p.citizenship, p.document
-                    FROM booking 
-                    AS b INNER JOIN passengers 
-                    AS p ON p.booking_id=b.id 
-                    WHERE id=$1
-                ''', args)
-        return [
-            {
-                'id': d['id'], 'pnr': d['pnr'], 'expires_at': d['expires_at'],
-                'phone': d['phone'], 'email': d['email'], 'offer': json.loads(d['offer']),
-                'passengers': {
-                    'gender': d['gender'], 'type': d['type'], 
-                    'first_name': d['first_name'], 'last_name': d['last_name'], 
-                    'date_of_birth': d['date_of_birth'], 'citizenship': d['citizenship'],
-                    'document': json.loads(d['document'])
-                }
-            }
-            for d in data
-        ]
+                data = await conn.fetchrow('''
+                    SELECT * FROM booking INNER JOIN passengers ON passengers.booking_id=booking.id WHERE id=$1
+                ''', booking)
+            return query_result(data)
+
+
+async def get_booking_filtered(args, db_pool: Pool):
+    async with db_pool.acquire() as conn:
+        pass
