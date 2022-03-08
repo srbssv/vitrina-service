@@ -3,8 +3,6 @@ import json
 from sanic.exceptions import NotFound, SanicException
 import asyncpg
 import aioredis
-from .data import bookingResponse2
-from .validations import BookingValidator
 from .settings import VitrinaConfig
 from .extapi import send_search, get_status, get_list,\
     get, get_ratevalue, rates_api, get_ratekey, send_booking, get_booking, get_booking_filtered
@@ -97,10 +95,11 @@ async def get_booking_(request, booking_id):
 
 @app.get('/booking/')
 async def get_booking_(request):
-    args = request.args
-    if args:
-        data = await get_booking_filtered(args, app.ctx.db_pool)
-        return response.json({'args': args})
+    if not request.args:
+        raise NotFound('Ничего не найдено')
+    data = await get_booking_filtered(request.args, app.ctx.db_pool)
+    if data:
+        return response.json(data)
     else:
         raise NotFound('Ничего не найдено')
 

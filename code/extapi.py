@@ -171,5 +171,31 @@ async def get_booking(booking, db_pool: Pool):
 
 
 async def get_booking_filtered(args, db_pool: Pool):
+
+    def is_int(value):
+        try:
+            int(is_int)
+        except:
+            return False
+        else:
+            return True
+
+    # Получаем offset и limit
+    arg_sql = {'page': 'OFFSET', 'limit': 'LIMIT'}
+    offset_limit = ''
+    for item in arg_sql:
+        arg = args.get(item)
+        if arg:
+            offset_limit += f' {arg_sql[item]} {arg}'
+    # Получаем phone и email
+    filter = [(k, v[0]) for k, v in args.items() if (k == 'phone') or (k == 'email')]
+    where = ''
+    if len(filter) > 0:
+        where = 'WHERE ' +'AND '.join(f'booking.{k}=\'{v}\'' for k, v in filter)
     async with db_pool.acquire() as conn:
-        pass
+        data = await conn.fetch(f'''
+                    SELECT * FROM booking INNER JOIN passengers 
+                    ON passengers.booking_id=booking.id 
+                    {where} {offset_limit}
+                ''')
+    return query_result(data)
