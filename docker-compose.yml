@@ -4,9 +4,8 @@ x-environment-vars: &environment-vars
   PYTHONUNBUFFERED: 1
   PYTHONIOENCODING: utf-8
   TERM: linux
-  DATABASE_URL: postgres://postgres:123456@vitrina-db/postgres
+  DATABASE_URL: postgres://postgres:123456@vitrina-db/postgres?sslmode=disable
   REDIS_URL: redis://vitrina-redis:6379
-  DEBUG: 1
 
 services:
     vitrina-service:
@@ -22,6 +21,9 @@ services:
         command: python -m code.app
         stdin_open: true
         tty: true
+        depends_on:
+            - "vitrina-db"
+            - "vitrina-redis"
     vitrina-db:
         image: postgres:14.1-alpine
         ports:

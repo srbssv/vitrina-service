@@ -1,15 +1,16 @@
 from sanic import Sanic, response
 import json
 from sanic.exceptions import NotFound, SanicException
-#import asyncpg
+import asyncpg
 import aioredis
-from .data import bookingResponse1, bookingResponse2
+from .data import bookingResponse2
 from .validations import BookingValidator
-from .exceptions import ValidationException
 from .settings import VitrinaConfig
-from .extapi import send_search, get_status, rates_api, get_list, get
+from .extapi import send_search, get_status, get_list,\
+    get, get_ratevalue, rates_api, get_ratekey, send_booking, get_booking
 import uuid
-#from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import datetime
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 
 app = Sanic('vitrina-service', config=VitrinaConfig())
@@ -17,20 +18,36 @@ app = Sanic('vitrina-service', config=VitrinaConfig())
 
 @app.listener('before_server_start')
 async def init_before(app, loop):
-    #app.ctx.db_pool = await asyncpg.create_pool(dsn=app.config.DATABASE_URL)
     app.ctx.redis = await aioredis.from_url(app.config.REDIS_URL, decode_responses=True, max_connections=50)
+    app.ctx.db_pool = await asyncpg.create_pool(dsn=app.config.DATABASE_URL)
 
+
+@app.listener('after_server_start')
+async def init_after(app, loop):
+    app.ctx.scheduler = AsyncIOScheduler()
+    app.ctx.scheduler.add_job(
+        rates_api, 
+        'cron',
+        hour=6,
+        minute=0,
+        second=0,
+        args=(datetime.date.isoformat(datetime.date.today()), app.ctx.redis))
+    app.ctx.scheduler.start()
 
 @app.listener('after_server_stop')
 async def cleanup(app, loop):
     await app.ctx.redis.close()
+    app.ctx.scheduler.shutdown()
 
 
 @app.post('/search')
 async def post_search(request):
     req = request.json
     id = str(uuid.uuid4())
-    await send_search(id, req, app.ctx.redis)
+    if not await get_ratekey(app.ctx.redis):
+        await rates_api(datetime.date.isoformat(datetime.date.today()), app.ctx.redis)
+    ratevalue = await get_ratevalue(req['currency'], app.ctx.redis)
+    await send_search(id, req, app.ctx.redis, req['currency'], float(ratevalue))
     return response.json({'id':id})
 
 
@@ -53,52 +70,29 @@ async def get_offer(request, offer_id):
     offer = await get(offer_id, app.ctx.redis)
     if not offer:
         raise NotFound('Оффер с таким id не найден!')
-    return response.json({'pepsi': json.loads(offer)})
+    return response.json(json.loads(offer))
 
 
 # Booking endpoint (GET, POST)
-@app.get('/booking')
-async def get_booking(request):
-    return response.json(bookingResponse1)
-
-
 @app.post('/booking')
 async def post_booking(request):
     req = request.json
-    # Валидация обязательных параметров
-    v = BookingValidator(req)
-    return response.json(bookingResponse2)
+    offer = await get(req['offer_id'], app.ctx.redis)
+    if not offer:
+        raise NotFound('Оффер с таким id не найден, либо истекло время запроса поиска!')
+    resp = await send_booking(req, app.ctx.db_pool)
+    return response.json(resp)
 
 
-@app.get('/get_rates')
-async def get_rates(request):
-    date = request.args.get('date')
-    return await rates_api(date)
-
-
-@app.exception(ValidationException)
-async def validation_handler(request, e: ValidationException):
-    return response.json(
-            {
-                'detail': {
-                    'msg': str(e),
-                    'field': e.extra
-                }
-            },
-            status=e.status_code)
-
-
-@app.exception(NotFound)
-async def notfound_handler(request, e: NotFound):
-    return response.json(
-        {
-            'details': [
-                {
-                    'msg': str(e)
-                }
-            ]
-        }
-    )
+@app.get('/booking/<booking_id>')
+async def get_booking_(request, booking_id):
+    if not booking_id:
+        data = await get_booking('ALL', app.ctx.db_pool)
+    else:
+        data = await get_booking(booking_id, app.ctx.db_pool)
+    if not data:
+        raise NotFound('Букинг не найден!')
+    return response.json(data)
 
 
 @app.exception(SanicException)
@@ -115,4 +109,4 @@ async def nexception_handler(request, e: SanicException):
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8000, debug=app.config.DEBUG)
+    app.run(host='0.0.0.0', port=8000, debug=True)

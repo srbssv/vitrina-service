@@ -1,6 +1,7 @@
 FROM python:3.8-slim
 
 RUN pip install --upgrade pip
+ADD https://github.com/amacneil/dbmate/releases/download/v1.6.0/dbmate-linux-musl-amd64 /usr/local/bin/dbmate
 
 COPY requirements/ /tmp/requirements
 
@@ -11,3 +12,8 @@ COPY . /proj
 WORKDIR /proj
 RUN chown -R app:app /proj/*
 USER app
+
+USER root
+RUN chmod +x /usr/local/bin/dbmate
+USER app
+RUN chmod +x /proj/bin/*
