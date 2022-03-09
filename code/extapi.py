@@ -1,13 +1,9 @@
 import asyncio
 import httpx
 import json
-import xmltodict
-import datetime
-from asyncpg import Pool, Record
 
 
 REDIS_KEY_EXPIRE = 60 * 20
-REDIS_RATES_EXPIRE = 60 * 60 * 24
 PROVIDER_TIMEOUT = 30
 PROVIDERS = ['Amadeus', 'Sabre']
 PENDING = 'PENDING'
@@ -21,18 +17,20 @@ async def send_search(id, req, redis, rate_name, rate_value):
         asyncio.create_task(search_api(id, req, redis, provider, rate_name, rate_value))
 
 
-async def search_api(id, req, redis, provider: str, rate_name: str, rate_value: float):
+async def search_api(id, req, redis, provider: str, rate_name: str, all_rates):
     async with httpx.AsyncClient() as client:
         req['provider'] = provider
         try:
             resp = await client.post(
-                'https://avia-api.k8s-test.aviata.team/offers/search', 
-                json=req, 
+                'https://avia-api.k8s-test.aviata.team/offers/search',
+                json=req,
                 timeout=PROVIDER_TIMEOUT)
             for item in resp.json()['items']:
                 offer_id = item['id']
                 # Расчет валюты в запросе
-                price = float(item['price']['amount']) / rate_value
+                price = float(item['price']['amount']) * \
+                    float(all_rates[item['price']['currency']]) / \
+                    float(all_rates[rate_name])
                 item['price']['amount'] = round(price, 2)
                 item['price']['currency'] = rate_name
                 async with redis.pipeline(transaction=True) as pipe:
@@ -56,108 +54,88 @@ async def get_status(id, redis):
     statuses = await asyncio.gather(*(get_provider_status(id, redis, p) for p in PROVIDERS))
     if None in statuses:
         return
+
     return 'DONE' if set(statuses) == {'DONE'} else 'PENDING'
 
 
-async def get_list(id, redis):
+async def get_search_list(id, redis):
     offers = await redis.lrange(f'vitrina.search:{id}', 0, -1)
     return [json.loads(offer) for offer in offers]
 
 
-async def get(id, redis):
+async def get_offer_value(id, redis):
     return await redis.get(f'vitrina.search:{id}')
 
 
-# Rates api and redis operations
-async def rates_api(date, redis):
-    dt = datetime.date.fromisoformat(date)
-    async with httpx.AsyncClient() as client:
-        url = f'https://www.nationalbank.kz/rss/get_rates.cfm?fdate={dt.strftime("%d.%m.%Y")}'
-        resp = await client.get(url)
-        xml = xmltodict.parse(resp.text)
-        rates = {rate['title']:rate['description'] for rate in xml['rates']['item']}
-        rates['date'] = date
-        rates['KZT'] = 1.0
-        async with redis.pipeline(transaction=True) as pipe:
-            await pipe.hset('vitrina.service:currency', mapping=rates)\
-                .expire('vitrina.service:currency', REDIS_RATES_EXPIRE)\
-                    .execute()
-        print('rates_api done', datetime.date.isoformat(datetime.date.today()))
-            
-
-async def get_ratevalue(name, redis):
-    return await redis.hget('vitrina.service:currency', name)
+# Booking operations
+async def send_booking(req, db_pool, redis):
+    return await booking_api(req, db_pool, redis)
 
 
-async def get_ratekey(redis):
-    return await redis.exists('vitrina.service:currency')
-
-
-# Booking rates operations
-async def send_booking(req, db_pool: Pool):
-    return await booking_api(req, db_pool)
-    
-
-async def booking_api(req, db_pool: Pool):
+async def booking_api(req, db_pool, redis):
     async with httpx.AsyncClient() as client:
         resp = await client.post(
-            'https://avia-api.k8s-test.aviata.team/offers/booking', 
-            json=req, 
+            'https://avia-api.k8s-test.aviata.team/offers/booking',
+            json=req,
             timeout=PROVIDER_TIMEOUT)
         resp = resp.json()
+        redis_offer = await get_offer_value(req['offer_id'], redis)
         async with db_pool.acquire() as conn:
             async with conn.transaction():
-                await conn.execute('''
-                    INSERT INTO booking (id, pnr, expires_at, phone, email, offer)
-                    VALUES ($1, $2, $3, $4, $5, $6)
-                    ''',
-                    resp['id'], resp['pnr'], resp['expires_at'], 
-                    resp['phone'], resp['email'], json.dumps(resp['offer'])
-                )
+                await conn.execute(
+                    'INSERT INTO booking '
+                    '(id, pnr, expires_at, phone, email, offer) '
+                    'VALUES ($1, $2, $3, $4, $5, $6)',
+                    resp['id'],
+                    resp['pnr'],
+                    resp['expires_at'],
+                    resp['phone'],
+                    resp['email'],
+                    redis_offer)
                 for passenger in resp['passengers']:
-                        await conn.execute('''
-                            INSERT INTO passengers (gender, type, first_name, last_name, date_of_birth,
-                            citizenship, document, booking_id)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)''', 
-                            passenger['gender'], passenger['type'], passenger['first_name'], 
-                            passenger['last_name'], passenger['date_of_birth'], passenger['citizenship'], 
-                            json.dumps(passenger['document']), resp['id']
-                        )
+                    await conn.execute(
+                        'INSERT INTO passengers '
+                        '(gender, type, first_name,'
+                        'last_name, date_of_birth,'
+                        'citizenship, document, booking_id) '
+                        'VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+                        passenger['gender'],
+                        passenger['type'],
+                        passenger['first_name'],
+                        passenger['last_name'],
+                        passenger['date_of_birth'],
+                        passenger['citizenship'],
+                        json.dumps(passenger['document']),
+                        resp['id'])
         return resp
 
 
-def query_result(data):
-    if data == None:
-        return None
-    if type(data) == list:
-        return [
-                    {
-                        'id': d['id'], 'pnr': d['pnr'], 'expires_at': d['expires_at'],
-                        'phone': d['phone'], 'email': d['email'], 'offer': json.loads(d['offer']),
-                        'passengers': {
-                            'gender': d['gender'], 'type': d['type'], 
-                            'first_name': d['first_name'], 'last_name': d['last_name'], 
-                            'date_of_birth': d['date_of_birth'], 'citizenship': d['citizenship'],
-                            'document': json.loads(d['document'])
-                        }
-                    }
-                    for d in data
-                ]
-    if type(data) == Record:
-        return {
-                    'id': data['id'], 'pnr': data['pnr'], 'expires_at': data['expires_at'],
-                    'phone': data['phone'], 'email': data['email'], 'offer': json.loads(data['offer']),
-                    'passengers': {
-                        'gender': data['gender'], 'type': data['type'], 
-                        'first_name': data['first_name'], 'last_name': data['last_name'], 
-                        'date_of_birth': data['date_of_birth'], 'citizenship': data['citizenship'],
-                        'document': json.loads(data['document'])
-                    }
-                }
+def query_result_list(data):
+    return [query_result_record(d) for d in data]
 
 
-def query_result_items(data, page=0, limit=0, total=0):
-    results = query_result(data)
+def query_result_record(data):
+    return {
+            'id': data['id'],
+            'pnr': data['pnr'],
+            'expires_at': data['expires_at'],
+            'phone': data['phone'],
+            'email': data['email'],
+            'offer': json.loads(data['offer']),
+            'passengers': {
+                'gender': data['gender'],
+                'type': data['type'],
+                'first_name': data['first_name'],
+                'last_name': data['last_name'],
+                'date_of_birth': data['date_of_birth'],
+                'citizenship': data['citizenship'],
+                'document': json.loads(data['document'])
+            }
+        }
+
+
+def query_result_items(data, page, limit, total):
+    results = query_result_list(data)
     return {
         'page': page,
         'items': results,
@@ -165,47 +143,49 @@ def query_result_items(data, page=0, limit=0, total=0):
         'total': total
     }
 
-async def get_booking(booking, db_pool: Pool):
+
+async def get_booking_record(booking, db_pool):
     async with db_pool.acquire() as conn:
         async with conn.transaction():
-            if booking == 'ALL':
-                data = await conn.fetch('''
-                    SELECT * FROM booking INNER JOIN passengers ON passengers.booking_id=booking.id
-                ''')
-            else:
-                data = await conn.fetchrow('''
-                    SELECT * FROM booking INNER JOIN passengers ON passengers.booking_id=booking.id WHERE id=$1
-                ''', booking)
-            return query_result(data)
+            data = await conn.fetchrow(
+                    'SELECT * FROM booking '
+                    'INNER JOIN passengers '
+                    'ON passengers.booking_id=booking.id '
+                    'WHERE booking.id=$1',
+                    booking)
+            if not data:
+                return
+
+            return query_result_record(data)
 
 
-async def get_booking_filtered(args, db_pool: Pool):
-    show_as_items = False
+async def get_booking_items(args, db_pool):
     # Получаем offset и limit
-    arg_sql = {'page': 'OFFSET', 'limit': 'LIMIT'}
-    # символ "+" при передаче через URL теряется, поэтому добавляем его в начало строки
-    if 'phone' in args:
-        args['phone'][0] = '+' + args['phone'][0][1:]
-    offset_limit = ''
-    for item in arg_sql:
-        arg = args.get(item)
-        if arg:
-            offset_limit += f' {arg_sql[item]} {arg}'
-    # Получаем phone и email
-    filter = [(k, v[0]) for k, v in args.items() if (k == 'phone') or (k == 'email')]
-    where = ''
-    if len(filter) > 0:
-        where = 'WHERE ' +'AND '.join(f'booking.{k}=\'{v}\'' for k, v in filter)
+    page = int(args.get('page', 1))
+    if page < 1:
+        page = 1
+
+    limit = int(args.get('limit', 10))
+    filters = {
+        'phone': args.get('phone'),
+        'email': args.get('email'),
+    }
+    if filters['phone']:
+        filters['phone'] = '+' + filters['phone'][1:]
+
+    filters = {k: v for k, v in filters.items() if v}
+    filters_str = ''
+    if filters:
+        filters_str = 'WHERE ' + ' AND '.join(f'{k}=\'{v}\'' for k, v in filters.items())
+
+    sql_list = ['SELECT * FROM booking '
+                'INNER JOIN passengers '
+                'ON passengers.booking_id=booking.id ',
+                filters_str,
+                f' OFFSET {page - 1} LIMIT {limit} ']
+    sql = ' '.join(sql_list)
     async with db_pool.acquire() as conn:
-        data = await conn.fetch(f'''
-                    SELECT * FROM booking INNER JOIN passengers 
-                    ON passengers.booking_id=booking.id 
-                    {where} {offset_limit}
-                ''')
-        if len(offset_limit) > 0:
-            count = await conn.fetchval('''
-                SELECT COUNT(*) FROM booking
-            ''')
-            return query_result_items(data, args['page'][0], args['limit'][0], str(count))
-        else:
-            return query_result(data)
+        async with conn.transaction():
+            data = await conn.fetch(sql)
+            total = await conn.fetchval('SELECT COUNT(*) FROM booking')
+            return query_result_items(data, page, limit, total)

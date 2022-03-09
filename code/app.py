@@ -4,8 +4,8 @@ from sanic.exceptions import NotFound, SanicException
 import asyncpg
 import aioredis
 from .settings import VitrinaConfig
-from .extapi import send_search, get_status, get_list,\
-    get, get_ratevalue, rates_api, get_ratekey, send_booking, get_booking, get_booking_filtered
+from . import extapi
+from . import rates
 import uuid
 import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -16,7 +16,9 @@ app = Sanic('vitrina-service', config=VitrinaConfig())
 
 @app.listener('before_server_start')
 async def init_before(app, loop):
-    app.ctx.redis = await aioredis.from_url(app.config.REDIS_URL, decode_responses=True, max_connections=50)
+    app.ctx.redis = await aioredis.from_url(
+            app.config.REDIS_URL, decode_responses=True, max_connections=50
+        )
     app.ctx.db_pool = await asyncpg.create_pool(dsn=app.config.DATABASE_URL)
 
 
@@ -24,7 +26,7 @@ async def init_before(app, loop):
 async def init_after(app, loop):
     app.ctx.scheduler = AsyncIOScheduler()
     app.ctx.scheduler.add_job(
-        rates_api, 
+        rates.rates_api,
         'cron',
         hour=6,
         minute=0,
@@ -32,30 +34,34 @@ async def init_after(app, loop):
         args=(datetime.date.isoformat(datetime.date.today()), app.ctx.redis))
     app.ctx.scheduler.start()
 
+
 @app.listener('after_server_stop')
 async def cleanup(app, loop):
     await app.ctx.redis.close()
     app.ctx.scheduler.shutdown()
 
 
+# Search endpoint (GET, POST)
 @app.post('/search')
 async def post_search(request):
     req = request.json
     id = str(uuid.uuid4())
-    if not await get_ratekey(app.ctx.redis):
-        await rates_api(datetime.date.isoformat(datetime.date.today()), app.ctx.redis)
-    ratevalue = await get_ratevalue(req['currency'], app.ctx.redis)
-    await send_search(id, req, app.ctx.redis, req['currency'], float(ratevalue))
-    return response.json({'id':id})
+    all_rates = await rates.get_rates(app.ctx.redis)
+    if not all_rates:
+        await rates.rates_api(datetime.date.isoformat(datetime.date.today()), app.ctx.redis)
+
+    await extapi.send_search(id, req, app.ctx.redis, req['currency'], all_rates)
+    return response.json({'id': id})
 
 
-# Search endpoint (GET, POST)
 @app.get('/search/<search_id>')
 async def get_search(request, search_id):
-    status = await get_status(search_id, app.ctx.redis)
+    status = await extapi.get_status(search_id, app.ctx.redis)
     if not status:
         raise NotFound('Поиск с таким id не найден!')
-    offers = await get_list(search_id, app.ctx.redis)
+
+    offers = await extapi.get_search_list(search_id, app.ctx.redis)
+
     return response.json({
         'search_id': search_id,
         'status': status,
@@ -63,11 +69,13 @@ async def get_search(request, search_id):
         })
 
 
+# Offer endpoint (GET, POST)
 @app.get('/offers/<offer_id>')
 async def get_offer(request, offer_id):
-    offer = await get(offer_id, app.ctx.redis)
+    offer = await extapi.get_offer_value(offer_id, app.ctx.redis)
     if not offer:
         raise NotFound('Оффер с таким id не найден!')
+
     return response.json(json.loads(offer))
 
 
@@ -75,37 +83,32 @@ async def get_offer(request, offer_id):
 @app.post('/booking')
 async def post_booking(request):
     req = request.json
-    offer = await get(req['offer_id'], app.ctx.redis)
+    offer = await extapi.get_offer_value(req['offer_id'], app.ctx.redis)
     if not offer:
         raise NotFound('Оффер с таким id не найден, либо истекло время запроса поиска!')
-    resp = await send_booking(req, app.ctx.db_pool)
+
+    resp = await extapi.send_booking(req, app.ctx.db_pool, app.ctx.redis)
     return response.json(resp)
 
 
 @app.get('/booking/<booking_id>')
-async def get_booking_(request, booking_id):
-    if not booking_id:
-        data = await get_booking('ALL', app.ctx.db_pool)
-    else:
-        data = await get_booking(booking_id, app.ctx.db_pool)
+async def get_booking_query(request, booking_id):
+    data = await extapi.get_booking_record(booking_id, app.ctx.db_pool)
     if not data:
-        raise NotFound('Букинг не найден!')
+        raise NotFound('Бронь не найдена')
+
     return response.json(data)
 
 
-@app.get('/booking/')
-async def get_booking_(request):
-    if not request.args:
-        raise NotFound('Ничего не найдено')
-    data = await get_booking_filtered(request.args, app.ctx.db_pool)
-    if data:
-        return response.json(data)
-    else:
-        raise NotFound('Ничего не найдено')
+@app.get('/booking')
+async def get_booking_list(request):
+    data = await extapi.get_booking_items(request.args, app.ctx.db_pool)
+    return response.json(data)
 
 
+# Exception handler
 @app.exception(SanicException)
-async def nexception_handler(request, e: SanicException):
+async def exception_handler(request, e: SanicException):
     return response.json(
         {
             'details': [
