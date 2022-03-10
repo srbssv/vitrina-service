@@ -46,10 +46,9 @@ async def cleanup(app, loop):
 async def post_search(request):
     req = request.json
     id = str(uuid.uuid4())
-    all_rates = await rates.get_rates(app.ctx.redis)
-    if not all_rates:
-        await rates.rates_api(datetime.date.isoformat(datetime.date.today()), app.ctx.redis)
-
+    all_rates = await rates.rates_api(
+        datetime.date.isoformat(datetime.date.today()),
+        app.ctx.redis)
     await extapi.send_search(id, req, app.ctx.redis, req['currency'], all_rates)
     return response.json({'id': id})
 
@@ -121,4 +120,4 @@ async def exception_handler(request, e: SanicException):
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8000, debug=True)
+    app.run(host='0.0.0.0', port=8000)

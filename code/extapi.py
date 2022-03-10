@@ -11,10 +11,10 @@ DONE = 'DONE'
 
 
 # Search api operations
-async def send_search(id, req, redis, rate_name, rate_value):
+async def send_search(id, req, redis, rate_name, all_rates):
     for provider in PROVIDERS:
         await set_status(id, PENDING, redis, provider)
-        asyncio.create_task(search_api(id, req, redis, provider, rate_name, rate_value))
+        asyncio.create_task(search_api(id, req, redis, provider, rate_name, all_rates))
 
 
 async def search_api(id, req, redis, provider: str, rate_name: str, all_rates):
@@ -25,6 +25,7 @@ async def search_api(id, req, redis, provider: str, rate_name: str, all_rates):
                 'https://avia-api.k8s-test.aviata.team/offers/search',
                 json=req,
                 timeout=PROVIDER_TIMEOUT)
+
             for item in resp.json()['items']:
                 offer_id = item['id']
                 # Расчет валюты в запросе
@@ -33,6 +34,7 @@ async def search_api(id, req, redis, provider: str, rate_name: str, all_rates):
                     float(all_rates[rate_name])
                 item['price']['amount'] = round(price, 2)
                 item['price']['currency'] = rate_name
+
                 async with redis.pipeline(transaction=True) as pipe:
                     await pipe.lpush(f'vitrina.search:{id}', json.dumps(item))\
                         .set(f'vitrina.search:{offer_id}', json.dumps(item), ex=REDIS_KEY_EXPIRE)\
@@ -80,6 +82,7 @@ async def booking_api(req, db_pool, redis):
             timeout=PROVIDER_TIMEOUT)
         resp = resp.json()
         redis_offer = await get_offer_value(req['offer_id'], redis)
+
         async with db_pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(
@@ -92,6 +95,7 @@ async def booking_api(req, db_pool, redis):
                     resp['phone'],
                     resp['email'],
                     redis_offer)
+
                 for passenger in resp['passengers']:
                     await conn.execute(
                         'INSERT INTO passengers '
@@ -110,11 +114,11 @@ async def booking_api(req, db_pool, redis):
         return resp
 
 
-def query_result_list(data):
-    return [query_result_record(d) for d in data]
+def return_booking_list(data):
+    return [return_booking_record(d) for d in data]
 
 
-def query_result_record(data):
+def return_booking_record(data):
     return {
             'id': data['id'],
             'pnr': data['pnr'],
@@ -134,8 +138,8 @@ def query_result_record(data):
         }
 
 
-def query_result_items(data, page, limit, total):
-    results = query_result_list(data)
+def return_booking_items(data, page, limit, total):
+    results = return_booking_list(data)
     return {
         'page': page,
         'items': results,
@@ -156,7 +160,7 @@ async def get_booking_record(booking, db_pool):
             if not data:
                 return
 
-            return query_result_record(data)
+            return return_booking_record(data)
 
 
 async def get_booking_items(args, db_pool):
@@ -184,8 +188,9 @@ async def get_booking_items(args, db_pool):
                 filters_str,
                 f' OFFSET {page - 1} LIMIT {limit} ']
     sql = ' '.join(sql_list)
+
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             data = await conn.fetch(sql)
             total = await conn.fetchval('SELECT COUNT(*) FROM booking')
-            return query_result_items(data, page, limit, total)
+            return return_booking_items(data, page, limit, total)
