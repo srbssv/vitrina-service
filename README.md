@@ -1,10 +1,10 @@
-# Веб-сервис Витрина
+# Учебный проект "Веб-сервис Витрина"
 
 ## Инструкции для запуска без Docker
 
 1. Клонируем репозиторий и переходим в корневую директорию проекта
 ```bash
-git clone https://gitlab.com/internship2022/team-of-denis/aitugan/project.git
+git clone https://github.com/srbssv/vitrina-service.git
 cd project
 ```
 2. Создаем изолированную среду python, например с помощью [virtualenv](https://pypi.org/project/virtualenv)
@@ -170,7 +170,7 @@ docker-compose up
       "amount": 79522,
       "currency": "KZT"
     },
-    "refundable": True,
+    "refundable": true,
     "baggage": "1PC",
     "cabin": "Economy",
     "airline": {
